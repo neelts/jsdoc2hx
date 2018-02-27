@@ -1,20 +1,24 @@
 package ;
 import haxe.Json;
-import JSDoc2HX.JSDocKind;
-import Reflect;
-import Std;
-import String;
 import sys.FileSystem;
 import sys.io.File;
 
+using StringTools;
 using JSDoc2HX;
-using Std;
 
 class JSDoc2HX {
 
 	private static inline var JSON_EXT:String = '.json';
+	private static inline var JS_HTML:String = 'js.html.';
 
-	private static var out:String = "out";
+	private static var replaces = {
+		'HTMLCanvasElement': JS_HTML + 'CanvasElement',
+		'CanvasRenderingContext2D': JS_HTML,
+		'Float32Array': JS_HTML,
+		'Uint32Array': JS_HTML
+	};
+
+	private static var out:String = 'out';
 
 	public static function main():Void {
 		for (arg in Sys.args()) if (arg.isJSONExt()) loadJSON(arg);
@@ -41,11 +45,10 @@ class JSDoc2HX {
 		for (doc in json.docs) {
 			if (doc.memberof != null) {
 				var long:Array<String> = Std.string(
-					doc.longname.indexOf("#") != -1 ? doc.longname.substring(0, doc.longname.indexOf("#")) : doc.longname
-				).split(".");
+					doc.longname.indexOf('#') != -1 ? doc.longname.substring(0, doc.longname.indexOf('#')) : doc.longname
+				).split('.');
 				if (doc.kind == JSDocKind.Member) long.pop();
-				var longPath:String = long.join(".");
-				trace(longPath);
+				var longPath:String = long.join('.');
 				var hxClass:HXClass = classes.get(longPath);
 				if (hxClass == null) classes.set(longPath, hxClass = {});
 				var kinds:Array<JSDoc> = Reflect.field(hxClass, '_${doc.kind}');
@@ -59,7 +62,7 @@ class JSDoc2HX {
 			var path:Array<String> = classPath.convertPackages();
 			var className:String = path.last().capital();
 			var content:String = '';
-			content += 'package ${ path.head().join(".") };\n';
+			content += 'package ${ path.head().join('.') };\n';
 			content += '@:native("$classPath")\n';
 			content += 'extern class $className {\n';
 			if (hxClass._member.isNotEmpty()) content += getMembers(hxClass._member);
@@ -71,7 +74,7 @@ class JSDoc2HX {
 	}
 
 	private static function getMembers(members:Array<JSDoc>):String {
-		members.sort(function (a:JSDoc, b:JSDoc) {
+		members.sort(function(a:JSDoc, b:JSDoc) {
 			return a.scope == b.scope ? (
 				a.access == b.access ? (a.name > b.name ? 1 : -1) : (Std.string(a.access) > Std.string(b.access) ? 1 : -1)
 			) : ((a.scope != JSDocScope.Static && b.scope == JSDocScope.Static) ? 1 : -1);
@@ -88,40 +91,62 @@ class JSDoc2HX {
 				lastAccess = member.access;
 				result += '\n';
 			}
-			result += '\t${ getAccess(member) }${ getScope(member) } var ${ member.name }:${ getTypes(member.type) };\n';
+			result += '\t${ getAccess(member) }${ getScope(member) } var ${ member.name }:${ getTypes(member) };\n';
 			memberMap.set(member.name, true);
 		}
 		result += '\n';
 		return result;
 	}
 
-	private static function getTypes(typeNames:JSDocTypeNames):String {
+	private static function getTypes(doc:JSDoc):String {
+		var typeNames:JSDocTypeNames = doc.type;
+		var c:String = doc.comment;
 		if (typeNames != null && typeNames.names.isNotEmpty()) {
 			var names:Array<JSDocType> = typeNames.names;
 			return switch (names.length) {
-				case 1: getType(names.last());
-				case 2: 'haxe.extern.EitherType<${ getType(names.first())},${ getType(names.last()) }>';
-				default: getType(JSDocType.Object);
+				case 1: getType(names.last(), c);
+				case 2: 'haxe.extern.EitherType<${ getType(names.first(), c)},${ getType(names.last(), c) }>';
+				default: getType(JSDocType.Any);
 			}
-		} else return getType(JSDocType.Object);
+		} else return getType(JSDocType.Any);
 	}
 
-	private static function getType(type:JSDocType):String {
+	private static function getType(type:JSDocType, ?c:String):String {
 		return switch(type) {
 			case JSDocType.Number, JSDocType.Float: 'Float';
 			case JSDocType.Integer: 'Int';
 			case JSDocType.String: 'String';
 			case JSDocType.Boolean: 'Bool';
-			case JSDocType.Array: 'Array<Dynamic>';
+			case JSDocType.Array: 'Array<Any>';
 			case JSDocType.Function: 'Void->Void';
-			case JSDocType.Any: 'Any';
-			case JSDocType.Object, JSDocType.Null: 'Dynamic';
+			case JSDocType.Any, JSDocType.Object, JSDocType.Null: 'Any';
+			case JSDocType.ObjectDef: {
+				var type:String = '@type ';
+				var typeIndex:Int = c.indexOf(type) + type.length;
+				var t:String = c.substring(typeIndex, c.indexOf('\r', typeIndex));
+				var pairs:Array<String> = t.substring(1, t.length - 1).replace(' ', '').split(',');
+				var result:String = '{';
+				for (pair in pairs) {
+					var keyValue:Array<String> = pair.split(':');
+					result += ' ${ keyValue.first() }:${ getType(keyValue.last()) } ';
+				}
+				trace(result + '}');
+				result + '}';
+			}
 			default: {
 				var t:String = Std.string(type);
-				if (t.indexOf("Array.<") == 0) 'Array<${ t.substring(t.indexOf("<") + 1, t.indexOf(">")).convertPackages().join(".") }>'
-				else t.convertPackages().join(".");
+				if (t.indexOf('Array.<') == 0) {
+					'Array<${ t.substring(t.indexOf('<') + 1, t.indexOf('>')).convertPackages().join('.') }>';
+				} else checkReplace(t.convertPackages().join('.'));
 			}
 		}
+	}
+
+	private static function checkReplace(type:String):String {
+		return if (Reflect.hasField(replaces, type)) {
+			var replace:String = Reflect.field(replaces, type);
+			if (replace.charAt(replace.length - 1) == '.') replace + type else replace;  
+		} else type;
 	}
 
 	private static function getAccess(doc:JSDoc):String {
@@ -144,12 +169,17 @@ class JSDoc2HX {
 	}
 
 	public static inline function capital(string:String):String return string.substring(0, 1).toUpperCase() + string.substring(1);
+
 	public static inline function first<T>(array:Array<T>):T return array[0];
+
 	public static inline function last<T>(array:Array<T>):T return array[array.length - 1];
+
 	public static inline function head<T>(array:Array<T>):Array<T> return array.slice(0, array.length - 1);
+
 	public static inline function isNotEmpty<T>(array:Array<T>):Bool return array != null && array.length > 0;
+
 	public static inline function convertPackages(classPath:String):Array<String> {
-		var path:Array<String> = classPath.split(".");
+		var path:Array<String> = classPath.split('.');
 		for (i in 0...path.length - 1) path[i] = path[i].substr(0, 1).toLowerCase() + path[i].substr(1);
 		return path;
 	}
@@ -185,7 +215,7 @@ typedef HXClass = {
 	var Instance = 'instance';
 }
 
-@:enum abstract JSDocType(String) {
+@:enum abstract JSDocType(String) from String {
 	var Number = 'number';
 	var Float = 'float';
 	var Integer = 'integer';
@@ -196,6 +226,7 @@ typedef HXClass = {
 	var Null = 'null';
 	var Any = 'any';
 	var Object = 'object';
+	var ObjectDef = 'Object';
 }
 
 typedef JSDocs = {
@@ -203,6 +234,7 @@ typedef JSDocs = {
 }
 
 typedef JSDoc = {
+	var comment:String;
 	var meta:JSDocMeta;
 	var kind:JSDocKind;
 	var name:String;
@@ -224,7 +256,7 @@ typedef JSDocParam = {
 	var description:String;
 	var name:String;
 	@:optional var optional:Bool;
-	@:optional var defaultvalue:Dynamic;
+	@:optional var defaultvalue:Any;
 }
 
 typedef JSDocTypeNames = {
