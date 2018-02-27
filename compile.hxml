@@ -1,0 +1,11 @@
+-cp src
+-main JSDoc2HX
+-neko bin/jsdoc2hx.n
+-cmd cd bin/
+-cmd rm -rf out
+#-cmd npm install -g jsdoc
+#-cmd npm install -g jsdoc-json
+#-cmd npm link jsdoc-json
+#-cmd git pull https://github.com/photonstorm/phaser
+#-cmd jsdoc --template ./node_modules/jsdoc-json --destination doc.json --recurse phaser/src
+-cmd neko jsdoc2hx.n doc.json
